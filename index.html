@@ -1,138 +1,159 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>CC HS26</title>
+    <meta name="title" content="BA Interaction Design : Creative Coding Portfolio" />
+    <link rel="icon" type="image/x-icon" href="favicon/favicon.ico" />
+    <style>
+      @font-face {
+        font-family: 'Suisse';
+        src: url('fonts/Suisse.ttf') format('truetype');
+      }
 
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>CC HS26 </title>
-  <meta name="title" content="BA Interaction Design : Creative Coding Portfolio" />
-  <link rel="icon" type="image/x-icon" href="favicon/favicon.ico" />
-  <style>
-    @font-face {
-      font-family: "Suisse";
-      src: url("fonts/Suisse.ttf") format("truetype");
-    }
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
 
-    * { margin: 0; padding: 0; box-sizing: border-box; }
+      html,
+      body {
+        height: 100%;
+      }
 
-    html, body { height: 100%; }
+      body {
+        font-family:
+          'Suisse',
+          -apple-system,
+          system-ui,
+          sans-serif;
+      }
 
-    body {
-      font-family: "Suisse", -apple-system, system-ui, sans-serif;
-    }
+      .split {
+        display: flex;
+        height: 100vh;
+        width: 100vw;
+      }
 
-    .split {
-      display: flex;
-      height: 100vh;
-      width: 100vw;
-    }
+      .half {
+        flex: 1;
+        position: relative;
+        cursor: pointer;
+        overflow: hidden;
+        text-decoration: none;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
 
-    .half {
-      flex: 1;
-      position: relative;
-      cursor: pointer;
-      overflow: hidden;
-      text-decoration: none;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-    }
+      /* the zoomable background lives in its own layer */
+      .half::before {
+        content: '';
+        position: absolute;
+        inset: 0;
+        background-image: inherit;
+        background-size: cover;
+        background-position: center;
+        transition: transform 0.6s ease;
+      }
 
-    /* the zoomable background lives in its own layer */
-    .half::before {
-      content: "";
-      position: absolute;
-      inset: 0;
-      background-image: inherit;
-      background-size: cover;
-      background-position: center;
-      transition: transform 0.6s ease;
-    }
+      .half:hover::before {
+        transform: scale(1.03);
+      }
 
-    .half:hover::before {
-      transform: scale(1.03);
-    }
+      .label {
+        position: relative;
+        z-index: 1;
+        color: #fff;
+        mix-blend-mode: difference;
+        font-size: 8rem;
+        font-weight: 800;
+        letter-spacing: 0.05em;
+        text-decoration: none;
+        pointer-events: none;
+        transition: transform 0.4s ease;
+      }
 
-    .label {
-      position: relative;
-      z-index: 1;
-      color: #fff;
-      mix-blend-mode: difference;
-      font-size: 8rem;
-      font-weight: 800;
-      letter-spacing: 0.05em;
-      text-decoration: none;
-      pointer-events: none;
-      transition: transform 0.4s ease;
-    }
+      .half:hover .label {
+        transform: scale(1.05);
+      }
 
-    .half:hover .label {
-      transform: scale(1.05);
-    }
+      /* small frosted-glass button for the hidden bonus project */
+      .bonus {
+        position: fixed;
+        left: 50%;
+        bottom: 24px;
+        z-index: 10;
+        width: 72px;
+        height: 72px;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: rgba(255, 255, 255, 0.16);
+        -webkit-backdrop-filter: blur(14px) saturate(170%);
+        backdrop-filter: blur(14px) saturate(170%);
+        border: 1px solid rgba(255, 255, 255, 0.45);
+        box-shadow:
+          inset 0 1px 1px rgba(255, 255, 255, 0.6),
+          inset 0 -6px 12px rgba(255, 255, 255, 0.08),
+          0 8px 24px rgba(0, 0, 0, 0.25);
+        transform: translateX(-50%);
+        transition:
+          transform 0.3s ease,
+          box-shadow 0.3s ease;
+      }
 
-    /* small frosted-glass button for the hidden bonus project */
-    .bonus {
-      position: fixed;
-      left: 50%;
-      bottom: 24px;
-      z-index: 10;
-      width: 72px;
-      height: 72px;
-      border-radius: 50%;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      background: rgba(255, 255, 255, 0.16);
-      -webkit-backdrop-filter: blur(14px) saturate(170%);
-      backdrop-filter: blur(14px) saturate(170%);
-      border: 1px solid rgba(255, 255, 255, 0.45);
-      box-shadow:
-        inset 0 1px 1px rgba(255, 255, 255, 0.6),
-        inset 0 -6px 12px rgba(255, 255, 255, 0.08),
-        0 8px 24px rgba(0, 0, 0, 0.25);
-      transform: translateX(-50%);
-      transition: transform 0.3s ease, box-shadow 0.3s ease;
-    }
+      .bonus:hover {
+        transform: translateX(-50%) scale(1.1);
+        box-shadow:
+          inset 0 1px 1px rgba(255, 255, 255, 0.7),
+          inset 0 -6px 12px rgba(255, 255, 255, 0.12),
+          0 12px 32px rgba(0, 0, 0, 0.3);
+      }
 
-    .bonus:hover {
-      transform: translateX(-50%) scale(1.1);
-      box-shadow:
-        inset 0 1px 1px rgba(255, 255, 255, 0.7),
-        inset 0 -6px 12px rgba(255, 255, 255, 0.12),
-        0 12px 32px rgba(0, 0, 0, 0.3);
-    }
+      .bonus img {
+        width: 48px;
+        height: 48px;
+        border-radius: 50%;
+        object-fit: cover;
+        image-rendering: pixelated;
+      }
 
-    .bonus img {
-      width: 48px;
-      height: 48px;
-      border-radius: 50%;
-      object-fit: cover;
-      image-rendering: pixelated;
-    }
+      @media (max-width: 600px) {
+        .split {
+          flex-direction: column;
+        }
+        .label {
+          font-size: 5rem;
+        }
+      }
+    </style>
+  </head>
 
-    @media (max-width: 600px) {
-      .split { flex-direction: column; }
-      .label { font-size: 5rem; }
-    }
-  </style>
-</head>
+  <body>
+    <div class="split">
+      <a
+        class="half"
+        href="./projects/project1/index.html"
+        style="background-image: url('./projects/project1/thumbnail.png')"
+      >
+        <span class="label">Project 1</span>
+      </a>
+      <a
+        class="half"
+        href="./projects/project2/index.html"
+        style="background-image: url('./projects/project2/thumbnail.png')"
+      >
+        <span class="label">Project 2</span>
+      </a>
+    </div>
 
-<body>
-  <div class="split">
-    <a class="half" href="./projects/project1/index.html"
-       style="background-image: url('./projects/project1/thumbnail.png')">
-      <span class="label">Project 1</span>
+    <!-- hidden bonus project -->
+    <a class="bonus" href="./projects/kittyjump/index.html" aria-label="Bonus project: Kitty Jump" title="Bonus">
+      <img src="./projects/kittyjump/cat-face.png" alt="" />
     </a>
-    <a class="half" href="./projects/project2/index.html"
-       style="background-image: url('./projects/project2/thumbnail.png')">
-      <span class="label">Project 2</span>
-    </a>
-  </div>
-
-  <!-- hidden bonus project -->
-  <a class="bonus" href="./kittyjump/index.html" aria-label="Bonus project: Kitty Jump" title="Bonus">
-    <img src="./kittyjump/cat-face.png" alt="" />
-  </a>
-</body>
-
+  </body>
 </html>
