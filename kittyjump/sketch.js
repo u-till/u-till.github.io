@@ -49,6 +49,9 @@ async function setup() {
   cat.flipV();
   nuggetModel.flipV();
 
+  // The nugget scan has no vertex normals; p5 fills in zero vectors, which renders black under lights
+  nuggetModel.computeNormals();
+
   miauSound = new Audio('assets/miau.mp3');
 
   // Create a crisp checkered texture image
