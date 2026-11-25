@@ -2,3 +2,6 @@
 .vscode/
 .env
 .gitignore
+# raw Züri wie neu export (58 MB, contains free text), the sketch only needs cells.csv
+projects/project2/stzh.zwn_meldungen_p.csv
+projects/project2/quartiere.json
