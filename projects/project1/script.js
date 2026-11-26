@@ -1,12 +1,15 @@
 // =====================================================================
 //  ASSIGNED ON ARRIVAL
 //  Every visitor gets a number, computed from what their browser reveals.
-//  Drag over the card to smudge it. Type to overwrite the number. It comes back.
+//  Drag over the card to smear it like wet ink: the fields scramble until the cables bring the data back.
+//  Type to overwrite the number. It comes back.
 //  Drag across a cable to cut it: that signal is lost and the number changes.
 //
 //  Layer 1: the typography interaction            (done)
 //  Layer 2: ID card layout, signal fields, fingerprint, machine-readable zone (done)
-//  Layer 3: cables from the signals into the card, pulses, the eye   (this version)
+//  Layer 3: cables from the signals into the card, pulses, the eye   (done)
+//  Arrival: the eye comes down to the glass and scans you top to bottom, then the cables
+//           grow out of the floor, plug into the card and fill it in   (this version)
 // =====================================================================
 
 // ---------- fingerprint: collect signals, hash them ----------
@@ -46,12 +49,11 @@ function collectSignals() {
   const plat = (navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || 'unknown';
   add('platform', 'PLATFORM', plat, platformName(plat));
   add('cores', 'CPU CORES', navigator.hardwareConcurrency || 'n/a');
-  add(
-    'memory',
-    'MEMORY',
-    navigator.deviceMemory ? navigator.deviceMemory + ' GB' : 'n/a',
-    navigator.deviceMemory ? navigator.deviceMemory + ' GB' : 'NOT DISCLOSED',
-  );
+  // display: colour gamut and dynamic range, answered by CSS media queries in every current browser
+  const mq = (q) => !!(window.matchMedia && window.matchMedia(q).matches);
+  const gamut = mq('(color-gamut: rec2020)') ? 'REC2020' : mq('(color-gamut: p3)') ? 'P3' : 'SRGB';
+  const range = mq('(dynamic-range: high)') ? 'HDR' : 'SDR';
+  add('display', 'DISPLAY', `${gamut} ${range}`, `${gamut} COLOUR · ${range}`);
   add('touch', 'TOUCH POINTS', navigator.maxTouchPoints || 0);
 
   // fonts: an installed font renders a test string at a different width than the fallback
@@ -255,8 +257,8 @@ const SLOTS = 12,
   GROUP = 4; // "7F3A 91C0 D2E4"
 const GRID = 5; // spacing of the dot grid that fills each letter
 
-let glyphs = []; // one per slot: { ch, x, y, pts:[{x,y,hx,hy,vx,vy}], flash }
-let ridges = []; // fingerprint characters: { x,y,hx,hy,vx,vy, ch, a }
+let glyphs = []; // one per slot: { ch, x, y, pts:[{x,y,hx,hy,wet}], flash, locked }
+let ridges = []; // fingerprint characters: { x,y,hx,hy,wet, ch, a, ring }  wet = smeared, stays put until healed
 let display = ''; // what is currently shown (differs from trueId while you type)
 let caret = 0;
 let lastTypeMs = -1e9,
@@ -280,7 +282,7 @@ const FIELD_ORDER = [
   'cores',
   'timezone',
   'language',
-  'memory',
+  'display',
   'fonts',
   'canvas',
 ];
@@ -288,6 +290,12 @@ let cables = []; // per cable: { cut, tCut, cutMs }
 let pulses = []; // { cable, t, speed, onArrive }  travelling down a cable
 let nextIdlePulse = 0;
 let fixing = new Set(); // slots whose correction is already on its way
+let scrambled = Array(N_CABLES).fill(null); // per field: garbled text shown until its cable delivers the value again
+let repairing = new Set(); // fields whose repair pulse is on its way
+let lastSmudgeMs = -1e9,
+  smearDist = 0, // finger travel through the ink since the last scrambled character
+  repairStart = 0;
+const SMEAR_STEP = 45; // texture px of smearing per scrambled character
 let eye = { look: { x: 0, y: 0 }, dilate: 0, saccadeUntil: 0, nextSaccade: 0, alarmUntil: 0, swing: 0 };
 const floorY = () => height / 2 - 40; // the floor is just inside the bottom of the frame
 
@@ -295,6 +303,132 @@ const BG = [242, 242, 239];
 const CARD_BG = [250, 250, 247];
 const INK = 'rgb(18,18,18)';
 const GREY = [128, 128, 124];
+const CAM_Z = 800; // p5 2.x puts its default camera 800 units in front of the scene
+
+// ---------- the arrival: the eye scans you, the cables plug in, the card fills in ----------
+// everything here is a function of intro.t (seconds of drawn frames), so a click can jump to the end
+
+const PLAN = {
+  approach: [0.5, 1.8], // the eye comes down to the glass
+  scan: [2.1, 4.0], // the laser runs from the top of the screen to the bottom
+  retract: [4.3, 5.4], // back up under the ceiling
+  sockets: 4.9, // the floor sockets open
+  grow: 5.1, // the first cable starts to grow out of the floor
+  growStep: 0.1, // between two cables
+  growDur: 0.8,
+  pulseDur: 0.45, // the value travels up its cable into the card
+  charDur: 0.03, // one character of a field typed in
+};
+let intro = { on: true, t: 0, skip: false, end: 0, number: 0, print: 0, mrz: 0, shown: '', rings: -1, doneMs: -1e9 };
+let A = null; // what the arrival shows this frame; null once it is over
+
+const clamp01 = (x) => Math.min(1, Math.max(0, x));
+const span = (t, [a, b]) => clamp01((t - a) / (b - a));
+const easeInOut = (x) => (x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2);
+const easeOut = (x) => 1 - Math.pow(1 - x, 3);
+const easeOutBack = (x) => 1 + 2.70158 * Math.pow(x - 1, 3) + 1.70158 * Math.pow(x - 1, 2);
+const HEX = '0123456789ABCDEF';
+const scrambleChar = (i, b) => HEX[Math.floor(Math.abs(Math.sin(i * 78.233 + b * 12.9898) * 43758.5453)) % 16];
+
+const cableRank = (i) => (i % 5) * 2 + Math.floor(i / 5); // left and right take turns, top row first
+const connectAt = (i) => PLAN.grow + cableRank(i) * PLAN.growStep + PLAN.growDur;
+function fieldText(i) {
+  const s = signals.find((z) => z.key === FIELD_ORDER[i]);
+  return s ? s.show.slice(0, 24) : '';
+}
+
+// the number waits for the last field, the print and the machine-readable zone follow the number
+function planArrival() {
+  let typed = 0;
+  for (let i = 0; i < N_CABLES; i++)
+    typed = Math.max(typed, connectAt(i) + PLAN.pulseDur + fieldText(i).length * PLAN.charDur);
+  intro.number = typed + 0.3;
+  intro.print = intro.number + 0.45;
+  intro.mrz = intro.number + 1.0;
+  intro.end = intro.mrz + 1.0;
+}
+
+function arrival(t) {
+  const a = { t, grow: [], socket: [], connected: [], pulses: [], chars: [], typing: [], slots: [], locked: [] };
+  a.close = easeInOut(span(t, PLAN.approach)) * (1 - easeInOut(span(t, PLAN.retract)));
+  a.laser = clamp01((t - PLAN.scan[0] + 0.25) / 0.25) * (1 - clamp01((t - PLAN.scan[1]) / 0.3));
+  a.scan = easeInOut(span(t, PLAN.scan));
+  for (let i = 0; i < N_CABLES; i++) {
+    const c = connectAt(i),
+      arrive = c + PLAN.pulseDur,
+      len = fieldText(i).length;
+    a.socket.push(easeOutBack(clamp01((t - PLAN.sockets - cableRank(i) * 0.05) / 0.3)));
+    a.grow.push(easeOut(clamp01((t - c + PLAN.growDur) / PLAN.growDur)));
+    a.connected.push(t >= c);
+    if (t >= c && t < arrive) a.pulses.push({ cable: i, t: (t - c) / PLAN.pulseDur });
+    const n = t < arrive ? 0 : Math.min(len, Math.floor((t - arrive) / PLAN.charDur) + 1);
+    a.chars.push(n);
+    a.typing.push(t >= arrive && n < len);
+  }
+  // the number flickers through random characters, then locks from left to right
+  for (let i = 0; i < SLOTS; i++) {
+    const from = intro.number + i * 0.03,
+      lock = intro.number + 0.35 + i * 0.065;
+    a.locked.push(t >= lock);
+    a.slots.push(t < from ? null : t >= lock ? trueId[i] : scrambleChar(i, Math.floor(t / 0.05)));
+  }
+  a.rings = Math.round(clamp01((t - intro.print) / 1.1) * 24 * 8) / 8; // the print spreads from its core
+  a.mrz = Math.floor(clamp01((t - intro.mrz) / 0.7) * 2 * MRZ_COLS);
+  a.key = a.chars.join(',') + '|' + a.connected.map(Number).join('') + '|' + a.mrz; // what the static layer shows
+
+  // one line at the bottom says what the machine is doing
+  const lines = [
+    [PLAN.approach[0], 'VISITOR DETECTED'],
+    [PLAN.scan[0], 'SCANNING VISITOR'],
+    [PLAN.scan[1] + 0.4, 'READING WHAT YOUR BROWSER REVEALS'],
+    [intro.number, 'ASSIGNING YOUR NUMBER'],
+  ];
+  a.status = '';
+  for (const [from, msg] of lines) if (t >= from) a.status = msg.slice(0, Math.floor((t - from) / 0.025));
+  return a;
+}
+
+// bring the card, the number and the print up to the arrival's current moment
+function applyArrival() {
+  if (A.key !== intro.shown) {
+    intro.shown = A.key;
+    drawStatic();
+  }
+  A.slots.forEach((c, i) => {
+    const g = glyphs[i];
+    if (c === null) return;
+    if (A.locked[i]) {
+      if (!g.locked) {
+        snapGlyph(i, trueId[i]);
+        g.flash = 1;
+        g.locked = true;
+      }
+    } else if (g.ch !== c) snapGlyph(i, c);
+  });
+  if (A.rings !== intro.rings) {
+    intro.rings = A.rings;
+    fpSettled = false;
+  }
+}
+
+function endArrival() {
+  intro.on = false;
+  A = null;
+  intro.doneMs = millis();
+  glyphs.forEach((g, i) => {
+    if (g.ch !== display[i]) snapGlyph(i, display[i]);
+    if (!g.locked) g.flash = 1;
+    g.locked = true;
+  });
+  fpSettled = false;
+  drawStatic();
+  nextIdlePulse = millis() + 1200;
+}
+
+// a click or a key jumps to the end
+function skipArrival() {
+  intro.skip = true; // a flag, so a click while the fonts still load is not lost
+}
 
 async function setup() {
   backButton();
@@ -308,6 +442,9 @@ async function setup() {
   cables = FIELD_ORDER.map(() => ({ cut: false, tCut: 0, cutMs: 0 }));
   recomputeId();
   display = trueId;
+  intro.on = !new URLSearchParams(location.search).has('nointro');
+  planArrival();
+  if (intro.on) A = arrival(0);
 
   card = createGraphics(TEX_W, TEX_H);
   card.pixelDensity(2);
@@ -381,9 +518,16 @@ function layoutGlyphs() {
   for (let i = 0; i < SLOTS; i++) {
     const g = Math.floor(i / GROUP);
     const x = x0 + i * adv + g * gap;
-    const pts = pointsFor(display[i], x, ID_BASE_Y).map((p) => ({ x: p.x, y: p.y, hx: p.x, hy: p.y, vx: 0, vy: 0 }));
-    glyphs.push({ ch: display[i], x, y: ID_BASE_Y, pts, flash: 0 });
+    const pts = pointsFor(display[i], x, ID_BASE_Y).map((p) => ({ x: p.x, y: p.y, hx: p.x, hy: p.y }));
+    glyphs.push({ ch: display[i], x, y: ID_BASE_Y, pts, flash: 0, locked: !intro.on });
   }
+}
+
+// replace one glyph's character at once, with no morph (the flicker while the number is computed)
+function snapGlyph(i, ch) {
+  const g = glyphs[i];
+  g.pts = pointsFor(ch, g.x, g.y).map((p) => ({ x: p.x, y: p.y, hx: p.x, hy: p.y }));
+  g.ch = ch;
 }
 
 // replace one glyph's character; its points morph from where the old points are now
@@ -394,7 +538,7 @@ function setGlyph(i, ch) {
   const old = g.pts;
   g.pts = fresh.map((p, k) => {
     const src = old.length ? old[k % old.length] : p;
-    return { x: src.x, y: src.y, hx: p.x, hy: p.y, vx: 0, vy: 0 };
+    return { x: src.x, y: src.y, hx: p.x, hy: p.y };
   });
   g.ch = ch;
   g.flash = 1;
@@ -418,6 +562,8 @@ function cutCable(i, t) {
   if (sig) sig.cut = true;
   for (const p of pulses) if (p.cable === i && p.slot !== undefined) fixing.delete(p.slot); // re-send on another cable
   pulses = pulses.filter((p) => p.cable !== i);
+  repairing.delete(i); // its field reads ???????? now, nothing left to repair
+  scrambled[i] = null;
   recomputeId();
   drawStatic();
   buildFingerprint(true);
@@ -456,10 +602,9 @@ function buildFingerprint(morph = false) {
         y,
         hx: x,
         hy: y,
-        vx: 0,
-        vy: 0,
         ch: fullHash[(i * 5 + k) % 32],
         a: atan2(cos(th) * squash, -sin(th)),
+        ring: i,
       });
     }
   }
@@ -480,7 +625,10 @@ function drawRidges(ctx, ox, oy) {
   ctx.font = `8px "${fontB.face.family}"`;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
+  const rings = A ? A.rings : Infinity; // during the arrival the print spreads ring by ring
   for (const p of ridges) {
+    if (p.ring >= rings) continue;
+    ctx.globalAlpha = Math.min(1, rings - p.ring);
     ctx.save();
     ctx.translate(p.x + ox, p.y + oy);
     ctx.rotate(p.a);
@@ -490,46 +638,108 @@ function drawRidges(ctx, ox, oy) {
   ctx.restore();
 }
 
-// ---------- motion: spring home, smudge ----------
+// ---------- motion: no momentum. points ease straight home, except wet (smeared) ones ----------
 
 function updatePoints() {
-  const k = 0.004,
-    damp = 0.9; // soft spring back home, takes a few seconds
-  const step = (p) => {
-    p.vx += (p.hx - p.x) * k;
-    p.vy += (p.hy - p.y) * k;
-    p.vx *= damp;
-    p.vy *= damp;
-    p.x += p.vx;
-    p.y += p.vy;
+  const ease = (p) => {
+    if (p.wet || (p.x === p.hx && p.y === p.hy)) return false;
+    const dx = p.hx - p.x,
+      dy = p.hy - p.y;
+    if (abs(dx) + abs(dy) < 0.05) {
+      p.x = p.hx;
+      p.y = p.hy;
+    } else {
+      p.x += dx * 0.12;
+      p.y += dy * 0.12;
+    }
+    return true;
   };
   for (const g of glyphs) {
-    for (const p of g.pts) step(p);
+    for (const p of g.pts) ease(p);
     g.flash *= 0.9;
   }
   let moving = false;
-  for (const p of ridges) {
-    step(p);
-    if (abs(p.vx) + abs(p.vy) > 0.01 || abs(p.x - p.hx) + abs(p.y - p.hy) > 0.25) moving = true;
-  }
+  for (const p of ridges) if (ease(p)) moving = true;
   if (moving) fpSettled = false;
 }
 
-// a thumb dragged across the glass: push points near the caret along the drag
+// a fingertip through wet ink: dots near its path are dragged part of the way along and stay where
+// they are left. the further a dot already is from home, the less it gives. returns whether anything moved
 function smudge(from, to) {
   const dx = to.x - from.x,
-    dy = to.y - from.y;
-  const R = 60;
-  const push = (p) => {
-    const d = dist(p.x, p.y, to.x, to.y);
-    if (d < R) {
-      const f = 1 - d / R;
-      p.vx += dx * 0.35 * f + random(-1, 1) * f;
-      p.vy += dy * 0.35 * f + random(-1, 1) * f;
-    }
+    dy = to.y - from.y,
+    len2 = dx * dx + dy * dy;
+  if (len2 < 0.01) return false;
+  const R = 24;
+  let moved = false;
+  const drag = (p) => {
+    const u = clamp01(((p.x - from.x) * dx + (p.y - from.y) * dy) / len2); // nearest point on the path
+    const d = dist(p.x, p.y, from.x + u * dx, from.y + u * dy);
+    if (d >= R) return;
+    const f = ((1 - d / R) ** 2 * 0.6) / (1 + dist(p.x, p.y, p.hx, p.hy) / 22);
+    p.x += dx * f;
+    p.y += dy * f;
+    p.wet = true;
+    moved = true;
   };
-  for (const g of glyphs) for (const p of g.pts) push(p);
-  for (const p of ridges) push(p);
+  for (const g of glyphs) for (const p of g.pts) drag(p);
+  for (const p of ridges) drag(p);
+  if (moved) fpSettled = false;
+  return moved;
+}
+
+// ---------- smearing corrupts the fields; the cables bring the data back ----------
+
+const GLITCH = '0123456789ABCDEF#%&@?/<>*+=';
+
+function scrambleFields(n) {
+  const live = intactCables().filter((i) => fieldText(i).length);
+  if (!live.length) return;
+  for (let k = 0; k < n; k++) {
+    const i = random(live);
+    const chars = [...(scrambled[i] ?? fieldText(i))];
+    chars[floor(random(chars.length))] = random([...GLITCH]);
+    scrambled[i] = chars.join('');
+  }
+  drawStatic();
+}
+
+// once the finger has been off the ink for a moment, every scrambled field gets its value sent again.
+// when the last of those pulses arrives, the smeared ink flows back into place
+function repair() {
+  if (repairing.size || prevHit || millis() - lastSmudgeMs < FIX_DELAY) return;
+  const isWet = (p) => p.wet;
+  const wet = scrambled.some(Boolean) || ridges.some(isWet) || glyphs.some((g) => g.pts.some(isWet));
+  if (!wet) return;
+  const live = intactCables();
+  if (!live.length) {
+    // nothing connected: nothing to wait for
+    scrambled.fill(null);
+    drawStatic();
+    heal();
+    return;
+  }
+  let targets = live.filter((i) => scrambled[i]);
+  if (!targets.length) targets = [random(live)]; // only ink to fix: one refresh is enough
+  repairStart = millis();
+  targets.forEach((i, k) => {
+    repairing.add(i);
+    pulses.push({ cable: i, t: -k * 0.12, speed: 1 / 40, onArrive: () => restoreField(i) }); // staggered
+  });
+}
+
+function restoreField(i) {
+  repairing.delete(i);
+  if (scrambled[i]) {
+    scrambled[i] = null;
+    drawStatic();
+  }
+  if (!repairing.size && lastSmudgeMs < repairStart) heal(); // not smeared again since the pulses left
+}
+
+function heal() {
+  for (const g of glyphs) for (const p of g.pts) p.wet = false;
+  for (const p of ridges) p.wet = false;
 }
 
 // ---------- typing and correction ----------
@@ -538,6 +748,10 @@ const ALLOWED = /^[A-Z0-9#*+\-=?!$%&@.:;,<>\/\\]$/;
 
 function keyTyped() {
   if (!glyphs.length) return;
+  if (intro.on) {
+    skipArrival();
+    return false;
+  }
   const ch = key.toUpperCase();
   if (!ALLOWED.test(ch)) return;
   if (caret >= SLOTS) caret = 0;
@@ -548,7 +762,11 @@ function keyTyped() {
   return false;
 }
 
-function keyPressed() {
+function keyPressed(e) {
+  if (intro.on) {
+    if (!(e && (e.metaKey || e.ctrlKey || e.altKey))) skipArrival(); // leave browser shortcuts alone
+    return;
+  }
   if (keyCode === BACKSPACE) {
     caret = max(0, caret - 1);
     lastTypeMs = millis();
@@ -622,14 +840,17 @@ function cableGeometry(i) {
 
 // world point to screen pixels under p5's default camera
 function toScreen(w) {
-  const cz = height / 2 / tan(PI / 6);
-  const k = cz / (cz - w.z);
+  const k = CAM_Z / (CAM_Z - w.z);
   return { x: w.x * k + width / 2, y: w.y * k + height / 2 };
 }
 
 // the cable's points, with the gap and the drooping ends if it has been cut
 function cablePoints(i) {
-  const pts = bezierPts(...cableGeometry(i), 28);
+  const geo = cableGeometry(i);
+  const grow = A ? A.grow[i] : 1;
+  if (grow <= 0) return [];
+  if (grow < 1) return [bezierRange(...geo, 1 - grow, 1, 28)]; // still growing up out of the floor
+  const pts = bezierPts(...geo, 28);
   const c = cables[i];
   if (!c.cut) return [pts];
   const cutIdx = c.tCut * 28;
@@ -710,10 +931,13 @@ function ribbons(polylines, w, dz) {
   endShape();
 }
 
-function bezierPts(a, b, c, d, n) {
+const bezierPts = (a, b, c, d, n) => bezierRange(a, b, c, d, 0, 1, n);
+
+// n + 1 points on the curve between t0 and t1
+function bezierRange(a, b, c, d, t0, t1, n) {
   const pts = [];
   for (let i = 0; i <= n; i++) {
-    const t = i / n;
+    const t = t0 + ((t1 - t0) * i) / n;
     pts.push({
       x: bezierPoint(a.x, b.x, c.x, d.x, t),
       y: bezierPoint(a.y, b.y, c.y, d.y, t),
@@ -727,11 +951,13 @@ function drawCables() {
   push();
   noStroke();
   const lines = [],
-    ends = [];
+    ends = [],
+    tips = [];
   for (let i = 0; i < N_CABLES; i++) {
     const segs = cablePoints(i);
     lines.push(...segs);
     if (cables[i].cut && segs.length === 2) ends.push(segs[0][segs[0].length - 1], segs[1][0]); // the two cut ends
+    if (A && A.grow[i] > 0 && A.grow[i] < 1) tips.push(segs[0][0]); // the plug on its way up to the card
   }
   fill(54, 54, 52);
   ribbons(lines, 6, 0);
@@ -749,17 +975,27 @@ function drawCables() {
     sphere(3, 8, 6);
     pop();
   }
+  for (const e of tips) {
+    push();
+    translate(e.x, e.y, e.z - 4); // stays behind the card face when it slides into its socket
+    fill(40, 40, 38);
+    sphere(5, 10, 8);
+    pop();
+  }
   for (let i = 0; i < N_CABLES; i++) {
-    // floor sockets where the cables go in
+    // floor sockets where the cables go in; during the arrival they open one after the other
+    const s = A ? A.socket[i] : 1;
+    if (s <= 0) continue;
     const d = cableGeometry(i)[3];
     push();
     translate(d.x, floorY() - 0.5, d.z);
     rotateX(HALF_PI);
     fill(70, 70, 68);
-    ellipse(0, 0, 22, 22, 16);
+    ellipse(0, 0, 22 * s, 22 * s, 16);
     pop();
   }
-  for (const p of pulses) {
+  for (const p of A ? A.pulses : pulses) {
+    if (p.t < 0) continue; // waiting for its turn in the floor
     const [a, b, c, d] = cableGeometry(p.cable);
     const t = 1 - p.t; // from the far end into the card
     push();
@@ -776,69 +1012,112 @@ function drawCables() {
 }
 
 // a lens that hangs from the ceiling on a jointed arm, held by a claw. it follows the cursor,
-// glances at the card now and then, and dilates when you type or cut something
-function drawEye() {
+// glances at the card now and then, and dilates when you type or cut something.
+// during the arrival it comes down to the glass (toward the camera) and looks straight out at you
+const EYE_R = 39,
+  EYE_ARM = 122;
+
+function updateEye() {
   const now = millis();
-  const R = 39,
-    armLen = 122;
   eye.swing = lerp(eye.swing, map(mouseX, 0, width, -0.06, 0.06, true), 0.03);
+  const close = A ? A.close : 0;
+  const swing = eye.swing * (1 - close);
+  // up close the lens looks S times bigger; moving it toward the camera does that through perspective
+  const S = constrain((0.34 * height) / (2 * EYE_R), 2.4, 4.6);
+  const k = lerp(1, S, close);
+  const sx = lerp(sin(swing) * EYE_ARM, 0, close),
+    sy = lerp(-height / 2 + cos(swing) * EYE_ARM, -0.1 * height, close); // where it appears on screen
+  eye.pos = { x: sx / k, y: sy / k, z: CAM_Z * (1 - 1 / k) };
+
+  let lx,
+    ly,
+    follow = 0.15;
+  if (A && A.t < PLAN.retract[1]) {
+    // looking out of the screen at the visitor, the core riding along with its laser
+    lx = 0;
+    ly = A.laser > 0 ? lerp(-9, 9, A.scan) : 0;
+  } else {
+    let tx = mouseX - width / 2,
+      ty = mouseY - height / 2;
+    if (A) {
+      tx = panX; // back under the ceiling it watches the card being filled in
+      ty = CARD_Y;
+    } else if (now < eye.saccadeUntil) {
+      tx = panX;
+      ty = CARD_Y + cardH * 0.3;
+    } else if (now > eye.nextSaccade) {
+      if (random() < 0.35) eye.saccadeUntil = now + random(250, 500);
+      eye.nextSaccade = now + random(3000, 7000);
+    }
+    if (now < eye.saccadeUntil) follow = 0.5;
+    const dx = tx - eye.pos.x,
+      dy = ty - eye.pos.y,
+      d = max(1, sqrt(dx * dx + dy * dy));
+    const reach = min(11, d * 0.05);
+    lx = (dx / d) * reach;
+    ly = (dy / d) * reach;
+  }
+  eye.look.x = lerp(eye.look.x, lx, follow);
+  eye.look.y = lerp(eye.look.y, ly, follow);
+  const alert = A ? A.close > 0.3 : now - lastTypeMs < 1200 || now < eye.alarmUntil;
+  eye.dilate = lerp(eye.dilate, alert ? 1 : 0, 0.08);
+}
+
+function drawEye() {
+  const R = EYE_R;
+  const { x: ex, y: ey, z: ez } = eye.pos;
+  const breathe = 0.5 + 0.5 * sin(frameCount * 0.025);
+  const flare = A ? A.laser : 0; // the core burns hotter while the laser is on
   const px = 0,
     py = -height / 2; // pivot on the ceiling
-  const ex = px + sin(eye.swing) * armLen,
-    ey = py + cos(eye.swing) * armLen;
 
-  let tx = mouseX - width / 2,
-    ty = mouseY - height / 2;
-  if (now < eye.saccadeUntil) {
-    tx = panX;
-    ty = CARD_Y + cardH * 0.3;
-  } else if (now > eye.nextSaccade) {
-    if (random() < 0.35) eye.saccadeUntil = now + random(250, 500);
-    eye.nextSaccade = now + random(3000, 7000);
-  }
-  const dx = tx - ex,
-    dy = ty - ey,
-    d = max(1, sqrt(dx * dx + dy * dy));
-  const reach = min(11, d * 0.05);
-  const ease = now < eye.saccadeUntil ? 0.5 : 0.15;
-  eye.look.x = lerp(eye.look.x, (dx / d) * reach, ease);
-  eye.look.y = lerp(eye.look.y, (dy / d) * reach, ease);
-  eye.dilate = lerp(eye.dilate, now - lastTypeMs < 1200 || now < eye.alarmUntil ? 1 : 0, 0.08);
-  const breathe = 0.5 + 0.5 * sin(frameCount * 0.025);
+  // the arm runs from the ceiling plate to a hub just above the lens; up close it reaches toward you
+  let ux = ex - px,
+    uy = ey - py;
+  const ul = max(1e-6, sqrt(ux * ux + uy * uy));
+  ux /= ul;
+  uy /= ul;
+  const top = { x: px + ux * 6, y: py + uy * 6, z: 0 };
+  const hub = { x: ex - ux * (R + 2), y: ey - uy * (R + 2), z: ez };
+  const elbow = { x: (top.x + hub.x) / 2, y: (top.y + hub.y) / 2, z: (top.z + hub.z) / 2 };
 
   push();
   translate(0, 0, 3);
   noStroke();
 
   // ceiling plate and the arm
+  fill(40, 40, 38);
   push();
   translate(px, py, 0);
-  fill(40, 40, 38);
   rect(-38, 0, 76, 9, 0, 0, 3, 3);
-  rotate(-eye.swing);
-  const hub = armLen - R - 2;
-  rect(-3.5, 6, 7, hub * 0.5); // upper rod
-  circle(0, hub * 0.52, 15); // elbow
-  rect(-3, hub * 0.52, 6, hub * 0.48); // lower rod
-  circle(0, hub, 20); // hub the claw grows from
+  pop();
+  ribbons([[top, elbow]], 7, 0); // upper rod
+  ribbons([[elbow, hub]], 6, 0); // lower rod
+  push();
+  translate(elbow.x, elbow.y, elbow.z);
+  circle(0, 0, 15); // elbow
+  pop();
+  push();
+  translate(hub.x, hub.y, hub.z);
+  circle(0, 0, 20); // hub the claw grows from
   pop();
 
   // the lens
   push();
-  translate(ex, ey, 0);
+  translate(ex, ey, ez);
   fill(40, 40, 38);
-  circle(0, 0, R * 2); // bezel
+  ellipse(0, 0, R * 2, R * 2, 72); // bezel (72 segments: smooth when the lens comes up close)
   fill(14, 14, 14);
-  circle(0, 0, R * 2 - 12); // glass
+  ellipse(0, 0, R * 2 - 12, R * 2 - 12, 72); // glass
   const G = 26 + eye.dilate * 6;
   for (let i = 10; i >= 1; i--) {
     // red glow, brightest in the middle
     const f = i / 10;
     fill(190 + 60 * (1 - f), 20 + 40 * (1 - f), 15, 26 + 10 * breathe);
-    circle(eye.look.x * 0.6, eye.look.y * 0.6, G * 2 * f);
+    ellipse(eye.look.x * 0.6, eye.look.y * 0.6, G * 2 * f, G * 2 * f, 72);
   }
-  fill(255, 220, 150);
-  circle(eye.look.x, eye.look.y, 6 + eye.dilate * 3); // the hot core
+  fill(255, 220 + 25 * flare, 150 + 80 * flare);
+  circle(eye.look.x, eye.look.y, 6 + eye.dilate * 3 + flare * 2); // the hot core
   fill(255, 255, 255, 70);
   circle(-14, -14, 10); // reflection on the glass
   pop();
@@ -851,8 +1130,8 @@ function drawEye() {
       a1 = dir < 0 ? -PI - radians(42) : radians(42);
     for (let k = 0; k <= 16; k++) {
       const a = lerp(a0, a1, k / 16);
-      const r = R + 4 - (k / 16) * 4;
-      pts.push({ x: ex + cos(a) * r, y: ey + sin(a) * r, z: 1 });
+      const r = R + 3 - (k / 16) * 4; // overlaps the bezel a little, so no gap shows when the lens is up close
+      pts.push({ x: ex + cos(a) * r, y: ey + sin(a) * r, z: ez + 1 });
     }
     fingers.push(pts);
   }
@@ -861,11 +1140,70 @@ function drawEye() {
   for (const f of fingers) {
     const t = f[f.length - 1];
     push();
-    translate(t.x, t.y, 2);
+    translate(t.x, t.y, ez + 2);
     fill(26, 26, 24);
     circle(0, 0, 9);
     pop();
   }
+  pop();
+}
+
+// the scan: a red line of light from the lens, run down the glass over whoever sits in front of it.
+// z = 0 is the screen plane, one unit per pixel, so the line is drawn there; the fan comes from the core
+const laserY = () => lerp(-height / 2, height / 2, A.scan);
+
+function drawLaserFan() {
+  if (!A || A.laser <= 0) return;
+  const y = laserY(),
+    w2 = width / 2;
+  push();
+  noStroke();
+  beginShape(TRIANGLES);
+  fill(235, 40, 28, 70 * A.laser);
+  vertex(eye.pos.x + eye.look.x, eye.pos.y + eye.look.y, eye.pos.z + 3);
+  fill(235, 40, 28, 14 * A.laser);
+  vertex(-w2, y, 0);
+  vertex(w2, y, 0);
+  endShape();
+  pop();
+}
+
+function drawLaserLine() {
+  if (!A || A.laser <= 0) return;
+  const al = A.laser,
+    y = laserY(),
+    w2 = width / 2;
+  push();
+  noStroke();
+  beginShape(TRIANGLE_STRIP); // afterglow above the line, where it has just been, and a short lead below
+  fill(235, 40, 28, 0);
+  vertex(-w2, y - 70, 0);
+  vertex(w2, y - 70, 0);
+  fill(235, 40, 28, 60 * al);
+  vertex(-w2, y, 0);
+  vertex(w2, y, 0);
+  fill(235, 40, 28, 0);
+  vertex(-w2, y + 12, 0);
+  vertex(w2, y + 12, 0);
+  endShape();
+  fill(225, 30, 20, 255 * al);
+  rect(-w2, y - 1.5, width, 3);
+  fill(255, 225, 205, 255 * al);
+  rect(-w2, y - 0.5, width, 1); // the hot centre of the beam
+  // a ruler along both edges lights up where the line has passed
+  for (let k = 0, ty = -height / 2; ty < y; k++, ty += 16) {
+    const f = 1 - (y - ty) / 320;
+    if (f <= 0) continue;
+    const len = k % 5 === 0 ? 16 : 7;
+    fill(225, 30, 20, 200 * f * al);
+    rect(-w2 + 14, ty, len, 1.5);
+    rect(w2 - 14 - len, ty, len, 1.5);
+  }
+  textFont(fontB);
+  textSize(11);
+  textAlign(RIGHT, BASELINE);
+  fill(225, 30, 20, 255 * al);
+  text('SCAN ' + String(Math.round(A.scan * 100)).padStart(3, '0') + ' %', w2 - 40, y - 9);
   pop();
 }
 
@@ -876,9 +1214,8 @@ const rotYv = (v, a) => ({ x: v.x * cos(a) + v.z * sin(a), y: v.y, z: -v.x * sin
 
 // returns {x, y} on the card texture, or null if the mouse ray misses the card
 function cardHit(mx, my) {
-  const cz = height / 2 / tan(PI / 6); // p5's default camera distance
-  const C = { x: 0, y: 0, z: cz };
-  const d = { x: mx - width / 2, y: my - height / 2, z: -cz };
+  const C = { x: 0, y: 0, z: CAM_Z };
+  const d = { x: mx - width / 2, y: my - height / 2, z: -CAM_Z };
   const n = rotXv(rotYv({ x: 0, y: 0, z: 1 }, ry), rx);
   const P0 = { x: panX, y: panY + CARD_Y, z: 0 };
   const denom = d.x * n.x + d.y * n.y + d.z * n.z;
@@ -894,18 +1231,28 @@ function cardHit(mx, my) {
 
 let lastMouse = null; // previous drag position in pixels (p5's pmouse is per frame, not per event)
 function mousePressed() {
+  if (intro.on) return skipArrival();
   prevHit = cardHit(mouseX, mouseY);
   lastMouse = { x: mouseX, y: mouseY };
+  smearDist = SMEAR_STEP; // the first touch of the ink scrambles something straight away
 }
 function mouseReleased() {
   prevHit = null;
   lastMouse = null;
 }
 function mouseDragged() {
+  if (intro.on) return;
   const hit = cardHit(mouseX, mouseY);
   const now = { x: mouseX, y: mouseY };
-  if (hit && prevHit) smudge(prevHit, hit);
-  else if (!hit && lastMouse) for (const x of cableCrossings(lastMouse, now)) cutCable(x.cable, x.t);
+  if (hit && prevHit) {
+    if (smudge(prevHit, hit)) {
+      lastSmudgeMs = millis();
+      smearDist += dist(prevHit.x, prevHit.y, hit.x, hit.y);
+      const n = floor(smearDist / SMEAR_STEP);
+      if (n > 0) scrambleFields(n);
+      smearDist -= n * SMEAR_STEP;
+    }
+  } else if (!hit && lastMouse) for (const x of cableCrossings(lastMouse, now)) cutCable(x.cable, x.t);
   prevHit = hit;
   lastMouse = now;
 }
@@ -977,15 +1324,21 @@ function drawStatic() {
     spaced(g, s.label, x, y + 14, 11, 1.4);
     g.fill(s.cut ? 150 : 18);
     g.textSize(19);
-    g.text(s.cut ? '????????' : s.show.slice(0, 24), x, y + 38);
+    // typed in as its cable delivers it; garbled while smeared, until the cable delivers it again
+    const str = s.cut ? '????????' : (scrambled[i] ?? s.show.slice(0, 24)).slice(0, A ? A.chars[i] : 24);
+    g.text(str, x, y + 38);
+    if (A && A.typing[i]) {
+      g.fill(205, 40, 28);
+      g.rect(x + nativeWidth(fontB, 19, str) + 2, y + 24, 9, 15);
+    }
   });
 
-  // sockets where the cables enter
+  // sockets where the cables enter: pale until a cable is plugged in
   for (let i = 0; i < N_CABLES; i++) {
     const col = Math.floor(i / 5),
       row = i % 5;
     const y = FIELDS_Y + row * ROW_H + 26;
-    g.fill(cables[i] && cables[i].cut ? 200 : 60);
+    g.fill((cables[i] && cables[i].cut) || (A && !A.connected[i]) ? 200 : 60);
     if (col === 0) g.rect(0, y - 8, 12, 16, 0, 3, 3, 0);
     else g.rect(TEX_W - 12, y - 8, 12, 16, 3, 0, 0, 3);
   }
@@ -998,8 +1351,9 @@ function drawStatic() {
   g.fill(18);
   g.textSize(30);
   const pitch = (TEX_W - 2 * M) / MRZ_COLS;
+  let left = A ? A.mrz : Infinity; // printed character by character at the end of the arrival
   mrzLines().forEach((line, li) => {
-    for (let i = 0; i < line.length; i++) g.text(line[i], M + i * pitch, MRZ_Y[li]);
+    for (let i = 0; i < line.length && left > 0; i++, left--) g.text(line[i], M + i * pitch, MRZ_Y[li]);
   });
 
   // frame
@@ -1016,7 +1370,9 @@ function drawCard() {
 
   // the number, as dots
   ctx.fillStyle = INK;
-  for (const gl of glyphs) {
+  for (let i = 0; i < glyphs.length; i++) {
+    if (A && A.slots[i] === null) continue; // not computed yet
+    const gl = glyphs[i];
     const s = GRID * 0.62 + gl.flash * 4;
     for (const p of gl.pts) ctx.fillRect(p.x - s / 2, p.y - s / 2, s, s);
   }
@@ -1034,9 +1390,18 @@ function draw() {
   background(...BG);
   if (!glyphs.length) return;
 
+  // the arrival's clock only runs on frames that are drawn: a background tab or a slow font load can't eat it
+  if (intro.on) intro.t = intro.skip ? intro.end : intro.t + Math.min(deltaTime, 250) / 1000;
+  A = intro.on ? arrival(intro.t) : null;
+  if (A && A.t >= intro.end) endArrival();
+
   updatePoints();
-  updatePulses();
-  correct();
+  if (A) applyArrival();
+  else {
+    updatePulses();
+    correct();
+    repair();
+  }
   drawCard();
 
   // the card follows the mouse a little: tilt and pan
@@ -1062,19 +1427,31 @@ function draw() {
 
   const gl = drawingContext;
   gl.disable(gl.DEPTH_TEST); // overlays: always on top of the room
+  updateEye();
+  drawLaserFan();
   drawEye();
+  drawLaserLine();
 
-  cursor(!mouseIsPressed && nearCable(mouseX, mouseY) ? CROSS : ARROW);
+  cursor(!A && !mouseIsPressed && nearCable(mouseX, mouseY) ? CROSS : ARROW);
 
-  // hint and footer, flat on the screen
+  // flat on the screen: what the machine is doing during the arrival, then the hint and footer
   push();
   textFont(fontB);
   textAlign(CENTER, BASELINE);
-  fill(...GREY);
-  textSize(11);
-  text('DRAG OVER THE CARD TO SMUDGE  ·  TYPE TO OVERWRITE  ·  DRAG ACROSS A CABLE TO CUT IT', 0, height / 2 - 50);
-  textSize(13);
-  text('OPEN THIS PAGE IN A PRIVATE WINDOW. IF THE NUMBER IS THE SAME, NOTHING IS PROTECTING YOU.', 0, height / 2 - 28);
+  if (A) {
+    fill(18);
+    textSize(13);
+    text(A.status, 0, height / 2 - 50);
+    fill(...GREY);
+    textSize(11);
+    text('CLICK TO SKIP', 0, height / 2 - 28);
+  } else {
+    fill(...GREY, 255 * clamp01((millis() - intro.doneMs) / 900));
+    textSize(11);
+    text('DRAG OVER THE CARD TO SMUDGE  ·  TYPE TO OVERWRITE  ·  DRAG ACROSS A CABLE TO CUT IT', 0, height / 2 - 50);
+    textSize(13);
+    text('OPEN THIS PAGE IN A PRIVATE WINDOW. IF THE NUMBER IS THE SAME, NOTHING IS PROTECTING YOU.', 0, height / 2 - 28);
+  }
   pop();
   gl.enable(gl.DEPTH_TEST);
 }

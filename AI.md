@@ -18,13 +18,12 @@ Be honest and specific.
 - Brainstorming and stress-testing the concept (what the piece should make a non-technical visitor understand, how fingerprinting works, which sub-techniques exist such as canvas, WebGL and font fingerprinting)
 - Collecting references (net art about surveillance and obfuscation, 1970–90 science-fiction film aesthetics, the ZXX typeface, passport machine-readable zones)
 - A questionnaire that pinned down open design decisions before building
-- Writing and debugging the p5.js code, including headless browser tests
+- Writing and debugging the p5.js code
 - Finding public-domain OCR-A and OCR-B font files
 
 ### How did you use them?
 
 - Started with my idea in one message: use browser fingerprinting as the subject, p5.js as the vehicle, typography as the medium, with a literal fingerprint, a cyber aesthetic and 3D. Asked for a brainstorm and sources.
-- Follow-up questions: "is canvas fingerprinting a sub-technique?", "does FingerprintJS aggregate many signals?", "is there fingerprinting with CSS or SVG shapes?"
 - Refined the concept over several rounds: the visitor is assigned a number and can smudge or retype it, but it always comes back. I asked for an ID card, mouse-driven 3D tilt, THX 1138 and Brazil as aesthetic references, a fingerprint on the card, cables feeding the card and an eye that follows the mouse.
 - Answered a two-round questionnaire (palette, mouse mapping, correction timing, device scope, typeface, fingerprint style, signal collection, footer text, eye style).
 - Tested each build in my own browser and reported back: the private window showed a different number (the canvas signal was the only one that changed, so it was taken out of the number), the card was too big, the layout should look like a real ID.
