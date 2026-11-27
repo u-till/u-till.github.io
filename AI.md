@@ -11,55 +11,43 @@ Be honest and specific.
 
 ### Which tools did you use?
 
-- Claude (Claude Code running inside VS Code, model Claude Fable 5.1)
+Claude (Claude Code running inside VS Code, Fable and Opus)
 
 ### What did you use them for?
 
-- Brainstorming and stress-testing the concept (what the piece should make a non-technical visitor understand, how fingerprinting works, which sub-techniques exist such as canvas, WebGL and font fingerprinting)
-- Collecting references (net art about surveillance and obfuscation, 1970–90 science-fiction film aesthetics, the ZXX typeface, passport machine-readable zones)
-- A questionnaire that pinned down open design decisions before building
-- Writing and debugging the p5.js code
-- Finding public-domain OCR-A and OCR-B font files
+I used Claude to write the Code. I also used it to sharpen my concept and to brainstorm a bit.
 
 ### How did you use them?
 
-- Started with my idea in one message: use browser fingerprinting as the subject, p5.js as the vehicle, typography as the medium, with a literal fingerprint, a cyber aesthetic and 3D. Asked for a brainstorm and sources.
-- Refined the concept over several rounds: the visitor is assigned a number and can smudge or retype it, but it always comes back. I asked for an ID card, mouse-driven 3D tilt, THX 1138 and Brazil as aesthetic references, a fingerprint on the card, cables feeding the card and an eye that follows the mouse.
-- Answered a two-round questionnaire (palette, mouse mapping, correction timing, device scope, typeface, fingerprint style, signal collection, footer text, eye style).
-- Tested each build in my own browser and reported back: the private window showed a different number (the canvas signal was the only one that changed, so it was taken out of the number), the card was too big, the layout should look like a real ID.
-- Added ideas while it was being built: cables should come up from the floor, the visitor should be able to cut a cable so that its value is lost, the room should be a stylised white sci-fi room, and the eye should hang from the ceiling on a claw-like arm.
-- The code was written by Claude from these decisions, in three layers: typography interaction, card layout, cables and eye.
+I used it inside VS Code with the Claude Code extension.
 
 ### What was your own contribution?
 
-- The concept: making browser fingerprinting visible to non-technical people through typography that reacts to input, and the decision that the number must reset itself so that the interaction carries the message.
-- The subject matter choices: a literal fingerprint on the card, an ID card as the format, the eye on its ceiling mount, the cables as the visual link between the signals and the number, and cutting a cable as the way to lose a signal.
-- Aesthetic direction: dropping the hacker-terminal look in favour of a 1970–90 science-fiction, corporate-clinical white void; OCR-A as the typeface.
-- Rejections: the FingerprintJS dependency (own signal collection instead), the Suisse font that was in the template, and the green terminal aesthetic.
-- Testing on real browsers, which found the canvas-noise problem and led to the final footer text.
+The main ideas and concepts were mine. I knew from the start, which way i wanted to go. I also used references like "2001 space oddyssey" or "THX 1138" to give claude a visual direction.
 
 ### Reflection
 
-- <!-- draft, please rewrite in your own words --> Claude was fastest at turning decisions into working code and at finding references, but every decision that made the piece mine came from the questions I had to answer first. The private-window test showed that the concept needed real-world checking that only I could do.
+It was fun and i liked being able to have the freedom we got. Unfortunately i had to do a lot of other work as well this week so i would have liked to invest more time into the project, making it more personal and making it look less like AI, at least visually.
 
 ## Project 2
 
 ### Which tools did you use?
 
--
+Claude (Claude Code running inside VS Code, Fable and Opus)
 
 ### What did you use them for?
 
--
+- I used Claude to write the Code. Here i knew exactly what it should look like and what the interactions should be.
+  So it only did the implementation. I gave it the data. Also i used it to make the dataset smaller, it was 60mb.
 
 ### How did you use them?
 
--
+- I used it inside VS Code with the Claude Code extension.
 
 ### What was your own contribution?
 
--
+- Researching the topic, finding the data and coming up with the idea and concept to visualize it and which interactions to use.
 
 ### Reflection
 
--
+- If i've had more time, i would have liked to spend more time to look at the data and how to pull out interesting insights. Also some visual details i would improve. But it was fun, since it already made the data much more appealing than the original visualisation they have on their website (opendata zurich).
